@@ -1,0 +1,3 @@
+[submodule "proc_maps_parser"]
+	path = proc_maps_parser
+	url = git@github.com:DiMalovanyy/proc_maps_parser.git
